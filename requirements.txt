@@ -1,0 +1,11 @@
+opencv-python
+numpy
+librosa
+soundfile
+pydub
+ffmpeg-python
+python-dotenv
+PyYAML
+tqdm
+ultralytics
+boto3

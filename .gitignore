@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# Virtual env
+venv/
+.env/
+
+# Output data
+output/
+temp/
+data/
+
+# Models
+*.pt
+*.pth
+
+# Audio
+*.wav
+
+# Checkpoints
+*.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# AWS
+.aws/
+
+# Misc
+*.mp4
+*.avi
