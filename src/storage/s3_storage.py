@@ -30,14 +30,15 @@ class S3Storage:
 
     def list_schools(self, prefix: str = "School CCTV Dataset/") -> List[str]:
         """
-        Robustly list school folders from S3.
-
-        try:
-        print(">>> DEBUG: list_schools called")   
+        Robustly list school folders from S3. 
 
 
         Works even when CommonPrefixes is missing.
         """
+
+        try:
+        print(">>> DEBUG: list_schools called")  
+        
         try:
             response = self.s3.list_objects_v2(
                 Bucket=self.bucket,
