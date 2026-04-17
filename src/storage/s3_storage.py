@@ -25,23 +25,38 @@ class S3Storage:
         self.s3 = boto3.client("s3")
 
     # ----------------------------
-    # LIST SCHOOLS
+    # LIST SCHOOLS (ROBUST FIX)
     # ----------------------------
 
     def list_schools(self, prefix: str = "School CCTV Dataset/") -> List[str]:
         """
-        List all school folders.
+        Robustly list school folders from S3.
+
+        Works even when CommonPrefixes is missing.
         """
         try:
             response = self.s3.list_objects_v2(
                 Bucket=self.bucket,
-                Prefix=prefix,
-                Delimiter="/"
+                Prefix=prefix
             )
 
-            schools = [p["Prefix"] for p in response.get("CommonPrefixes", [])]
+            files = response.get("Contents", [])
 
-            logger.info(f"Found {len(schools)} schools")
+            schools = set()
+
+            for f in files:
+                key = f["Key"]
+
+                parts = key.split("/")
+
+                # Ensure structure: School CCTV Dataset/<School>/file.mp4
+                if len(parts) >= 3:
+                    school_prefix = "/".join(parts[:2]) + "/"
+                    schools.add(school_prefix)
+
+            schools = list(schools)
+
+            logger.info(f"Found {len(schools)} schools: {schools}")
             return schools
 
         except Exception as e:
@@ -64,14 +79,12 @@ class S3Storage:
 
             files = response.get("Contents", [])
 
-            # Filter only .mp4 files
             videos = [f for f in files if f["Key"].endswith(".mp4")]
 
             if not videos:
                 logger.warning(f"No videos found in {school_prefix}")
                 return None
 
-            # Sort by LastModified (latest first)
             videos.sort(key=lambda x: x["LastModified"], reverse=True)
 
             latest_key = videos[0]["Key"]
