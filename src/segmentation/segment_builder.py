@@ -1,3 +1,15 @@
+import logging
+
+# ----------------------------
+# LOGGER SETUP
+# ----------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] [SegmentBuilder] %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+
 class SegmentBuilder:
     """
     Builds meaningful video segments based on:
@@ -13,6 +25,10 @@ class SegmentBuilder:
         self.cfg = cfg
         self.reset()
 
+        # 🔧 DEBUG STATS (optional but useful)
+        self.dropped_short = 0
+        self.dropped_low_score = 0
+
     def reset(self):
         self.state = "IDLE"
         self.current = None
@@ -22,11 +38,20 @@ class SegmentBuilder:
     def process(self, timestamp, person_detected,
                 motion_score, audio_score):
 
+        # 🔧 INPUT SAFETY (production critical)
+        if motion_score is None:
+            motion_score = 0.0
+        if audio_score is None:
+            audio_score = 0.0
+        if person_detected is None:
+            person_detected = False
+
         # ----------------------------
         # STATE: IDLE
         # ----------------------------
         if self.state == "IDLE":
             if person_detected:
+                logger.debug(f"Opening segment at {timestamp}")
                 self._open(timestamp)
 
         # ----------------------------
@@ -38,18 +63,21 @@ class SegmentBuilder:
 
             duration = timestamp - self.current["start"]
 
-            # HARD LIMIT (strict safety)
+            # HARD LIMIT
             if duration >= self.cfg.HARD_LIMIT:
+                logger.debug(f"Closing segment at {timestamp} due to hard_split")
                 self._close("hard_split")
                 return
 
-            # SOFT LIMIT (normal split)
+            # SOFT LIMIT
             if duration >= self.cfg.MAX_DURATION:
+                logger.debug(f"Closing segment at {timestamp} due to soft_split")
                 self._close("soft_split")
                 return
 
             # No person → go to bridge
             if not person_detected:
+                logger.debug(f"Bridge started at {timestamp}")
                 self.state = "BRIDGE"
                 self.bridge_start = timestamp
 
@@ -60,13 +88,12 @@ class SegmentBuilder:
             gap = timestamp - self.bridge_start
 
             if person_detected:
-                # Person came back → continue segment
                 self.state = "ACTIVE"
                 self._update(timestamp, person_detected,
                              motion_score, audio_score)
 
             elif gap >= self.cfg.BRIDGE_GAP:
-                # Too long without person → close
+                logger.debug(f"Closing segment at {timestamp} due to gap_split")
                 self._close("gap_split")
 
     # ----------------------------
@@ -101,10 +128,13 @@ class SegmentBuilder:
     def _close(self, reason):
         seg = self.current
 
-        duration = seg["end"] - seg["start"]
+        # 🔧 SAFE DURATION
+        duration = max(seg["end"] - seg["start"], 0.0)
 
-        # Drop too short segments (noise)
+        # Drop too short segments
         if duration < self.cfg.MIN_DURATION:
+            logger.debug(f"Dropped short segment: {duration}s")
+            self.dropped_short += 1
             self._reset_current()
             return
 
@@ -127,7 +157,6 @@ class SegmentBuilder:
 
         # ----------------------------
         # MOTION NORMALIZATION
-        # (self-relative, prevents bias)
         # ----------------------------
         motion_ceiling = max(motion_avg * 3.0, 5.0)
         motion_norm = min(motion_avg / motion_ceiling, 1.0)
@@ -138,11 +167,13 @@ class SegmentBuilder:
         score = (
             self.cfg.WEIGHT_PERSON * person_ratio +
             self.cfg.WEIGHT_MOTION * motion_norm +
-            self.cfg.WEIGHT_AUDIO  * audio_avg
+            self.cfg.WEIGHT_AUDIO * audio_avg
         )
 
         # Drop low-quality segments
         if score < self.cfg.MIN_MEANINGFULNESS:
+            logger.debug(f"Dropped low-score segment: {score}")
+            self.dropped_low_score += 1
             self._reset_current()
             return
 
@@ -183,5 +214,11 @@ class SegmentBuilder:
             seg["clip_id"] = i
             seg["prev_clip_id"] = i - 1 if i > 0 else None
             seg["next_clip_id"] = i + 1 if i < len(self.segments) - 1 else None
+
+        logger.info(
+            f"Final segments: {len(self.segments)} | "
+            f"Dropped(short): {self.dropped_short} | "
+            f"Dropped(low_score): {self.dropped_low_score}"
+        )
 
         return self.segments

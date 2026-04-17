@@ -1,4 +1,14 @@
+import logging
 from typing import List, Dict
+
+# ----------------------------
+# LOGGER SETUP
+# ----------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] [SegmentMerger] %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 
 class SegmentMerger:
@@ -13,22 +23,27 @@ class SegmentMerger:
 
     def __init__(self, cfg):
         self.cfg = cfg
-        self.target_min = 60.0          # desired minimum
-        self.soft_min = 45.0            # acceptable minimum if merge not possible
+
+        # 🔧 CONFIG-DRIVEN (fallback safe)
+        self.target_min = getattr(cfg, "TARGET_CLIP_MIN", 60.0)
+        self.soft_min = getattr(cfg, "SOFT_CLIP_MIN", 45.0)
 
     def merge(self, segments: List[Dict]) -> List[Dict]:
         """
         Merge short segments intelligently.
-
-        Args:
-            segments: raw segments from SegmentBuilder
-
-        Returns:
-            merged segments
         """
 
         if not segments:
             return []
+
+        logger.info(f"Merging {len(segments)} segments...")
+
+        # 🔧 VALIDATION (production safety)
+        required_keys = ["start", "end", "duration"]
+        for seg in segments:
+            for key in required_keys:
+                if key not in seg:
+                    raise ValueError(f"Missing key '{key}' in segment: {seg}")
 
         merged = []
         i = 0
@@ -44,7 +59,6 @@ class SegmentMerger:
 
             # Try merging forward
             merged_segment = curr.copy()
-
             j = i + 1
 
             while j < len(segments):
@@ -58,8 +72,11 @@ class SegmentMerger:
 
                 # Merge segments
                 merged_segment["end"] = next_seg["end"]
-                merged_segment["duration"] = (
-                    merged_segment["end"] - merged_segment["start"]
+
+                # 🔧 SAFE DURATION (no negatives)
+                merged_segment["duration"] = max(
+                    merged_segment["end"] - merged_segment["start"],
+                    0.0
                 )
 
                 # Combine metrics (weighted average)
@@ -75,7 +92,6 @@ class SegmentMerger:
 
             # If still too small, allow soft minimum
             if merged_segment["duration"] < self.soft_min:
-                # keep anyway (do NOT drop data)
                 merged.append(merged_segment)
                 i = j
                 continue
@@ -83,11 +99,13 @@ class SegmentMerger:
             merged.append(merged_segment)
             i = j
 
-        # Reassign clip IDs cleanly
+        # 🔧 CLEAN CLIP IDS
         for idx, seg in enumerate(merged):
             seg["clip_id"] = idx
             seg["prev_clip_id"] = idx - 1 if idx > 0 else None
             seg["next_clip_id"] = idx + 1 if idx < len(merged) - 1 else None
+
+        logger.info(f"Final merged segments: {len(merged)}")
 
         return merged
 
@@ -102,23 +120,23 @@ class SegmentMerger:
             return (v1 * d1 + v2 * d2) / max(total_duration, 1e-6)
 
         seg1["person_ratio"] = weighted_avg(
-            seg1["person_ratio"], seg1["duration"],
-            seg2["person_ratio"], seg2["duration"]
+            seg1.get("person_ratio", 0.0), seg1["duration"],
+            seg2.get("person_ratio", 0.0), seg2["duration"]
         )
 
         seg1["motion_score"] = weighted_avg(
-            seg1["motion_score"], seg1["duration"],
-            seg2["motion_score"], seg2["duration"]
+            seg1.get("motion_score", 0.0), seg1["duration"],
+            seg2.get("motion_score", 0.0), seg2["duration"]
         )
 
         seg1["audio_score"] = weighted_avg(
-            seg1["audio_score"], seg1["duration"],
-            seg2["audio_score"], seg2["duration"]
+            seg1.get("audio_score", 0.0), seg1["duration"],
+            seg2.get("audio_score", 0.0), seg2["duration"]
         )
 
         seg1["meaningfulness_score"] = weighted_avg(
-            seg1["meaningfulness_score"], seg1["duration"],
-            seg2["meaningfulness_score"], seg2["duration"]
+            seg1.get("meaningfulness_score", 0.0), seg1["duration"],
+            seg2.get("meaningfulness_score", 0.0), seg2["duration"]
         )
 
         seg1["merged"] = True

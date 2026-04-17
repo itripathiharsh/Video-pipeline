@@ -1,65 +1,64 @@
 class Config:
     """
     Central configuration for the video processing pipeline.
-    Modify values here to tune performance, accuracy, and behavior.
+    Cloud-ready (S3 + EC2).
     """
 
     # ----------------------------
-    # INPUT / OUTPUT
+    # S3 CONFIG
     # ----------------------------
 
-    VIDEO_PATH = "data/input/video.mp4"
-    OUTPUT_DIR = "output"
+    S3_BUCKET = "your-bucket-name"   # 🔥 MUST CHANGE
 
     # ----------------------------
     # INGESTION (FRAME SAMPLING)
     # ----------------------------
 
-    FPS = 1                 # frames per second to process
-    WIDTH = 480              # resize width
-    HEIGHT = 270             # resize height
+    FPS = 1
+    WIDTH = 480
+    HEIGHT = 270
 
     # ----------------------------
     # PERSON DETECTION (YOLO)
     # ----------------------------
 
-    YOLO_MODEL = "yolov8n.pt"   # nano model (fastest)
-    YOLO_INTERVAL = 3.0         # run detection every N seconds
-    YOLO_CONF = 0.35            # confidence threshold
+    YOLO_MODEL = "yolov8n.pt"
+    YOLO_INTERVAL = 3.0
+    YOLO_CONF = 0.35
 
     # ----------------------------
     # SEGMENTATION RULES
     # ----------------------------
 
-    MIN_DURATION = 20.0         # drop very short noise clips
-    MAX_DURATION = 120.0        # soft split (ideal max)
-    HARD_LIMIT = 150.0          # hard cap (never exceed)
-    BRIDGE_GAP = 15.0           # allowed gap without person
+    MIN_DURATION = 20.0
+    MAX_DURATION = 120.0
+    HARD_LIMIT = 150.0
+    BRIDGE_GAP = 15.0
 
     # ----------------------------
     # MERGING (POST-PROCESSING)
     # ----------------------------
 
-    TARGET_MIN_DURATION = 60.0  # desired final minimum clip length
-    SOFT_MIN_DURATION = 45.0    # acceptable fallback minimum
+    TARGET_CLIP_MIN = 60.0     # 🔧 FIXED NAME
+    SOFT_CLIP_MIN = 45.0       # 🔧 FIXED NAME
 
     # ----------------------------
     # SCORING WEIGHTS
     # ----------------------------
 
-    WEIGHT_PERSON = 0.6         # most important
-    WEIGHT_MOTION = 0.25        # secondary signal
-    WEIGHT_AUDIO = 0.15         # tertiary (often 0 for CCTV)
+    WEIGHT_PERSON = 0.6
+    WEIGHT_MOTION = 0.25
+    WEIGHT_AUDIO = 0.15
 
-    MIN_MEANINGFULNESS = 0.10   # drop low-quality segments
+    MIN_MEANINGFULNESS = 0.10
 
     # ----------------------------
     # PERFORMANCE / SAFETY
     # ----------------------------
 
-    CHECKPOINT_DIR = "output/checkpoints"
-    AUDIO_DIR = "output/audio"
-    CLIPS_DIR = "output/clips"
+    CHECKPOINT_DIR = "/tmp/checkpoints"   # 🔧 EC2 SAFE
+    AUDIO_DIR = "/tmp/audio"
+    CLIPS_DIR = "/tmp/clips"
 
     # ----------------------------
     # DEBUG / LOGGING

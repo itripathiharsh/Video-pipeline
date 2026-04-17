@@ -1,6 +1,16 @@
 import os
 import subprocess
+import logging
 from typing import List, Dict
+
+# ----------------------------
+# LOGGER SETUP (EC2 SAFE)
+# ----------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] [ClipExtractor] %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 
 class ClipExtractor:
@@ -15,10 +25,11 @@ class ClipExtractor:
     - Fault-tolerant (continues on failure)
     """
 
-    def __init__(self, video_path: str, output_dir: str):
+    def __init__(self, video_path: str, output_dir: str = None):
         self.video_path = video_path
-        self.output_dir = output_dir
 
+        # 🔧 EC2 SAFE TEMP DIRECTORY
+        self.output_dir = output_dir or "/tmp/clips"
         os.makedirs(self.output_dir, exist_ok=True)
 
     # ----------------------------
@@ -80,7 +91,7 @@ class ClipExtractor:
                 return output_path
 
             # -------- Attempt 2: Re-encode Fallback --------
-            print(f"[ClipExtractor] Copy failed, retrying (clip {clip_id})")
+            logger.warning(f"Copy failed, retrying (clip {clip_id})")
 
             cmd_encode = [
                 "ffmpeg",
@@ -102,18 +113,18 @@ class ClipExtractor:
             )
 
             if process.returncode != 0:
-                print(f"[ClipExtractor] Failed clip {clip_id}")
-                print(process.stderr.decode())
+                logger.error(f"Failed clip {clip_id}")
+                logger.error(process.stderr.decode())
                 return None
 
             if not os.path.exists(output_path):
-                print(f"[ClipExtractor] Output missing for clip {clip_id}")
+                logger.error(f"Output missing for clip {clip_id}")
                 return None
 
             return output_path
 
         except Exception as e:
-            print(f"[ClipExtractor] Exception for clip {clip_id}: {e}")
+            logger.exception(f"Exception for clip {clip_id}: {e}")
             return None
 
     # ----------------------------
@@ -131,7 +142,7 @@ class ClipExtractor:
             list: updated metadata with file paths
         """
 
-        print(f"[ClipExtractor] Extracting {len(segments)} clips...")
+        logger.info(f"Extracting {len(segments)} clips...")
 
         final_metadata = []
 
@@ -147,9 +158,12 @@ class ClipExtractor:
             if output_path is None:
                 continue  # skip failed clip
 
-            seg["file_path"] = output_path
+            # 🔧 S3 + PIPELINE READY METADATA
+            seg["local_path"] = output_path
+            seg["file_name"] = os.path.basename(output_path)
+
             final_metadata.append(seg)
 
-        print(f"[ClipExtractor] Done. {len(final_metadata)} clips saved.")
+        logger.info(f"Done. {len(final_metadata)} clips saved.")
 
         return final_metadata

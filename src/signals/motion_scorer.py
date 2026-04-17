@@ -1,5 +1,11 @@
 import numpy as np
 import cv2
+import logging
+
+# ----------------------------
+# LOGGER SETUP
+# ----------------------------
+logger = logging.getLogger(__name__)
 
 
 class MotionScorer:
@@ -21,27 +27,36 @@ class MotionScorer:
     def score(self, frame) -> float:
         """
         Compute motion score for current frame.
-
-        Args:
-            frame (np.ndarray): BGR image
-
-        Returns:
-            float: motion score (unnormalized)
         """
 
-        # Convert to grayscale (faster + enough for motion)
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # 🔧 Handle None frame
+        if frame is None:
+            return 0.0
+
+        # 🔧 Handle corrupt / unexpected shape
+        if not hasattr(frame, "ndim") or frame.ndim != 3:
+            return 0.0
+
+        # Convert to grayscale
+        try:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        except Exception:
+            return 0.0
 
         # First frame case
         if self.prev_gray is None:
             self.prev_gray = gray
             return 0.0
 
-        # Absolute difference between frames
-        diff = cv2.absdiff(gray, self.prev_gray)
+        # Compute motion
+        try:
+            diff = cv2.absdiff(gray, self.prev_gray)
+            score = float(np.mean(diff))
+        except Exception:
+            score = 0.0
 
-        # Mean intensity difference = motion magnitude
-        score = float(np.mean(diff))
+        # 🔧 Optional debug (safe — not noisy unless enabled)
+        logger.debug(f"Motion score: {score}")
 
         # Update previous frame
         self.prev_gray = gray
