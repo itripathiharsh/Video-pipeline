@@ -32,6 +32,10 @@ class S3Storage:
         """
         Robustly list school folders from S3.
 
+        try:
+        print(">>> DEBUG: list_schools called")   
+
+
         Works even when CommonPrefixes is missing.
         """
         try:
