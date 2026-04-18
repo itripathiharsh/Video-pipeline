@@ -1,67 +1,71 @@
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
 class Config:
     """
     Central configuration for the video processing pipeline.
     Cloud-ready (S3 + EC2).
     """
 
-    # ----------------------------
-    # S3 CONFIG
-    # ----------------------------
+    def __init__(self):
 
-    S3_BUCKET = "your-bucket-name"   # 🔥 MUST CHANGE
+        # ----------------------------
+        # ENV / AWS
+        # ----------------------------
+        self.ENV = os.getenv("ENV", "prod")
+        self.AWS_DEFAULT_REGION = os.getenv("AWS_DEFAULT_REGION", "ap-south-1")
+        self.S3_BUCKET = os.getenv("S3_BUCKET", "sentio-mind-storage")
+        self.LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+        self.USE_GPU = os.getenv("USE_GPU", "false")
 
-    # ----------------------------
-    # INGESTION (FRAME SAMPLING)
-    # ----------------------------
+        # ----------------------------
+        # INGESTION (FRAME SAMPLING)
+        # ----------------------------
+        self.FPS = 1
+        self.WIDTH = 480
+        self.HEIGHT = 270
 
-    FPS = 1
-    WIDTH = 480
-    HEIGHT = 270
+        # ----------------------------
+        # PERSON DETECTION (YOLO)
+        # ----------------------------
+        self.YOLO_MODEL = "yolov8n.pt"
+        self.YOLO_INTERVAL = 3.0
+        self.YOLO_CONF = 0.35
 
-    # ----------------------------
-    # PERSON DETECTION (YOLO)
-    # ----------------------------
+        # ----------------------------
+        # SEGMENTATION RULES
+        # ----------------------------
+        self.MIN_DURATION = 20.0
+        self.MAX_DURATION = 120.0
+        self.HARD_LIMIT = 150.0
+        self.BRIDGE_GAP = 15.0
 
-    YOLO_MODEL = "yolov8n.pt"
-    YOLO_INTERVAL = 3.0
-    YOLO_CONF = 0.35
+        # ----------------------------
+        # MERGING (POST-PROCESSING)
+        # ----------------------------
+        self.TARGET_CLIP_MIN = 60.0
+        self.SOFT_CLIP_MIN = 45.0
 
-    # ----------------------------
-    # SEGMENTATION RULES
-    # ----------------------------
+        # ----------------------------
+        # SCORING WEIGHTS
+        # ----------------------------
+        self.WEIGHT_PERSON = 0.6
+        self.WEIGHT_MOTION = 0.25
+        self.WEIGHT_AUDIO = 0.15
 
-    MIN_DURATION = 20.0
-    MAX_DURATION = 120.0
-    HARD_LIMIT = 150.0
-    BRIDGE_GAP = 15.0
+        self.MIN_MEANINGFULNESS = 0.10
 
-    # ----------------------------
-    # MERGING (POST-PROCESSING)
-    # ----------------------------
+        # ----------------------------
+        # PERFORMANCE / PATHS (EC2 SAFE)
+        # ----------------------------
+        self.CHECKPOINT_DIR = "/tmp/checkpoints"
+        self.AUDIO_DIR = "/tmp/audio"
+        self.CLIPS_DIR = "/tmp/clips"
 
-    TARGET_CLIP_MIN = 60.0     # 🔧 FIXED NAME
-    SOFT_CLIP_MIN = 45.0       # 🔧 FIXED NAME
-
-    # ----------------------------
-    # SCORING WEIGHTS
-    # ----------------------------
-
-    WEIGHT_PERSON = 0.6
-    WEIGHT_MOTION = 0.25
-    WEIGHT_AUDIO = 0.15
-
-    MIN_MEANINGFULNESS = 0.10
-
-    # ----------------------------
-    # PERFORMANCE / SAFETY
-    # ----------------------------
-
-    CHECKPOINT_DIR = "/tmp/checkpoints"   # 🔧 EC2 SAFE
-    AUDIO_DIR = "/tmp/audio"
-    CLIPS_DIR = "/tmp/clips"
-
-    # ----------------------------
-    # DEBUG / LOGGING
-    # ----------------------------
-
-    PRINT_PROGRESS = True
+        # ----------------------------
+        # DEBUG / LOGGING
+        # ----------------------------
+        self.PRINT_PROGRESS = True
