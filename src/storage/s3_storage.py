@@ -22,7 +22,7 @@ class S3Storage:
 
     def __init__(self, bucket_name: str):
         self.bucket = bucket_name
-        self.s3 = boto3.client("s3")
+        self.s3 = boto3.client("s3",region_name="ap-south-1")
 
     # ----------------------------
     # LIST SCHOOLS (ROBUST FIX)
@@ -30,15 +30,10 @@ class S3Storage:
 
     def list_schools(self, prefix: str = "School CCTV Dataset/") -> List[str]:
         """
-        Robustly list school folders from S3. 
-
+        Robustly list school folders from S3.
 
         Works even when CommonPrefixes is missing.
         """
-
-        try:
-        print(">>> DEBUG: list_schools called")  
-        
         try:
             response = self.s3.list_objects_v2(
                 Bucket=self.bucket,
