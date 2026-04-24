@@ -1,11 +1,16 @@
+```python
 import os
 import shutil
+import json
+import time
+import logging
+import boto3
+
+# Prevent thread explosion (important for EC2 stability)
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
-
-import logging
 
 from config import Config
 
@@ -40,52 +45,28 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def run_pipeline():
-    cfg = Config()
+# =========================================================
+# 🔹 PROCESS SINGLE VIDEO (CORE PIPELINE)
+# =========================================================
+def process_single_video(s3_key, cfg, s3):
+    try:
+        # ----------------------------
+        # PARSE METADATA
+        # ----------------------------
+        school_name, date_folder = s3.parse_s3_key(s3_key)
 
-    # ----------------------------
-    # INIT S3
-    # ----------------------------
-    s3 = S3Storage(bucket_name=cfg.S3_BUCKET)
-
-    # ----------------------------
-    # FETCH SCHOOLS
-    # ----------------------------
-    schools = s3.list_schools()
-
-    for school_prefix in schools:
-
-        latest_video_key = s3.get_latest_video(school_prefix)
-
-        if not latest_video_key:
-            continue
+        logger.info(f"Processing: {s3_key}")
 
         # ----------------------------
-        # PARSE METADATA (FIXED ORDER)
+        # SAFE LOCAL PATH
         # ----------------------------
-        school_name, date_folder = s3.parse_s3_key(latest_video_key)
+        safe_name = s3_key.replace("/", "_")
+        local_video_path = f"/tmp/{safe_name}.mp4"
 
         # ----------------------------
-        # SKIP IF ALREADY PROCESSED (FIXED POSITION)
+        # DOWNLOAD VIDEO
         # ----------------------------
-        prefix = f"input_video/{school_name}/{date_folder}/"
-
-        existing = s3.s3.list_objects_v2(
-            Bucket=cfg.S3_BUCKET,
-            Prefix=prefix
-        )
-
-        if "Contents" in existing:
-            logger.info(f"Skipping already processed: {latest_video_key}")
-            continue
-
-        logger.info(f"Processing: {latest_video_key}")
-
-        # ----------------------------
-        # DOWNLOAD VIDEO (NOW SAFE)
-        # ----------------------------
-        local_video_path = f"/tmp/{school_name}_{date_folder}.mp4"
-        s3.download_video(latest_video_key, local_video_path)
+        s3.download_video(s3_key, local_video_path)
 
         # ----------------------------
         # PATHS (EC2 SAFE)
@@ -106,9 +87,8 @@ def run_pipeline():
         logger.info("Starting pipeline...")
 
         # ----------------------------
-        # AUDIO (DISABLED)
+        # AUDIO (DISABLED - LIGHT MODE)
         # ----------------------------
-        logger.info("Audio disabled (light mode)")
         audio_vad = AudioVAD(None)
 
         # ----------------------------
@@ -123,13 +103,10 @@ def run_pipeline():
         storage = LocalStorage(OUTPUT_DIR)
 
         # ----------------------------
-        # CHECKPOINT (S3 KEY SAFE)
+        # CHECKPOINT
         # ----------------------------
-        checkpoint = Checkpoint(latest_video_key)
+        checkpoint = Checkpoint(s3_key)
 
-        # ----------------------------
-        # RESUME
-        # ----------------------------
         last_processed_ts = checkpoint.resume_from()
         last_yolo_ts = last_processed_ts
         last_detection = False
@@ -137,19 +114,18 @@ def run_pipeline():
         logger.info(f"Resuming from: {round(last_processed_ts, 2)} sec")
 
         # ----------------------------
-        # MAIN LOOP
+        # MAIN FRAME LOOP
         # ----------------------------
         for frame, timestamp in streamer.frames():
 
             if timestamp < last_processed_ts:
                 continue
 
-            # YOLO INTERVAL
+            # YOLO INTERVAL CONTROL
             person_detected = last_detection
 
             if (timestamp - last_yolo_ts) >= cfg.YOLO_INTERVAL:
                 result = detector.detect(frame)
-
                 person_detected = result["person_detected"]
                 last_detection = person_detected
                 last_yolo_ts = timestamp
@@ -160,7 +136,7 @@ def run_pipeline():
             # AUDIO
             audio_score = audio_vad.score_at(timestamp)
 
-            # SEGMENT BUILD
+            # SEGMENT BUILDING
             segment_builder.process(
                 timestamp=timestamp,
                 person_detected=person_detected,
@@ -168,14 +144,14 @@ def run_pipeline():
                 audio_score=audio_score
             )
 
-            # CHECKPOINT (REDUCED FREQUENCY)
+            # SAVE CHECKPOINT EVERY 10s
             if int(timestamp) % 10 == 0:
                 checkpoint.save(timestamp)
 
         logger.info("Frame processing complete.")
 
         # ----------------------------
-        # FINALIZE
+        # FINALIZE SEGMENTS
         # ----------------------------
         segments = segment_builder.finalize()
         logger.info(f"Raw segments: {len(segments)}")
@@ -183,15 +159,18 @@ def run_pipeline():
         segments = merger.merge(segments)
         logger.info(f"Merged segments: {len(segments)}")
 
+        # ----------------------------
+        # EXTRACT CLIPS
+        # ----------------------------
         final_metadata = extractor.extract_all(segments)
 
         # ----------------------------
-        # SAVE METADATA
+        # SAVE METADATA LOCALLY
         # ----------------------------
         metadata_path = storage.save_metadata(final_metadata)
 
         # ----------------------------
-        # UPLOAD CLIPS
+        # UPLOAD CLIPS TO S3
         # ----------------------------
         clip_paths = [seg["local_path"] for seg in final_metadata]
 
@@ -202,7 +181,7 @@ def run_pipeline():
         )
 
         # ----------------------------
-        # UPLOAD METADATA
+        # UPLOAD METADATA TO S3
         # ----------------------------
         try:
             s3.s3.upload_file(
@@ -215,8 +194,68 @@ def run_pipeline():
 
         logger.info(f"Completed processing for {school_name}\n")
 
-    logger.info("ALL DONE 🚀")
+    except Exception as e:
+        logger.error(f"Pipeline failed for {s3_key}: {e}")
 
 
+# =========================================================
+# 🔹 SQS WORKER LOOP (EVENT-DRIVEN)
+# =========================================================
+def run_worker():
+    cfg = Config()
+    s3 = S3Storage(bucket_name=cfg.S3_BUCKET)
+
+    sqs = boto3.client("sqs", region_name=cfg.AWS_DEFAULT_REGION)
+
+    # ⚠️ REPLACE THIS WITH YOUR ACTUAL QUEUE URL
+    QUEUE_URL = "YOUR_SQS_QUEUE_URL"
+
+    logger.info("Worker started. Waiting for messages...")
+
+    while True:
+        try:
+            response = sqs.receive_message(
+                QueueUrl=QUEUE_URL,
+                MaxNumberOfMessages=1,
+                WaitTimeSeconds=20  # long polling
+            )
+
+            messages = response.get("Messages", [])
+
+            if not messages:
+                continue
+
+            for msg in messages:
+                try:
+                    body = json.loads(msg["Body"])
+
+                    # Extract S3 key from event
+                    s3_key = body["Records"][0]["s3"]["object"]["key"]
+
+                    logger.info(f"Received job: {s3_key}")
+
+                    # Process video
+                    process_single_video(s3_key, cfg, s3)
+
+                    # Delete message after success
+                    sqs.delete_message(
+                        QueueUrl=QUEUE_URL,
+                        ReceiptHandle=msg["ReceiptHandle"]
+                    )
+
+                    logger.info(f"Deleted message for: {s3_key}")
+
+                except Exception as e:
+                    logger.error(f"Error processing message: {e}")
+
+        except Exception as e:
+            logger.error(f"SQS polling error: {e}")
+            time.sleep(5)  # small backoff
+
+
+# =========================================================
+# 🔹 ENTRY POINT
+# =========================================================
 if __name__ == "__main__":
-    run_pipeline()
+    run_worker()
+```
