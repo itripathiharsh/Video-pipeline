@@ -1,10 +1,6 @@
-```python
 import os
 import shutil
-import json
-import time
 import logging
-import boto3
 
 # Prevent thread explosion (important for EC2 stability)
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
@@ -38,6 +34,7 @@ from src.storage.s3_storage import S3Storage
 # Utils
 from src.utils.checkpoint import Checkpoint
 
+
 # ----------------------------
 # LOGGER
 # ----------------------------
@@ -46,9 +43,17 @@ logger = logging.getLogger(__name__)
 
 
 # =========================================================
-# 🔹 PROCESS SINGLE VIDEO (CORE PIPELINE)
+# 🔹 CORE PIPELINE (USED BY API)
 # =========================================================
-def process_single_video(s3_key, cfg, s3):
+def process_single_video(s3_key, cfg=None, s3=None):
+    """
+    Main processing pipeline.
+    Called by API (app.py)
+    """
+
+    cfg = cfg or Config()
+    s3 = s3 or S3Storage(bucket_name=cfg.S3_BUCKET)
+
     try:
         # ----------------------------
         # PARSE METADATA
@@ -58,7 +63,7 @@ def process_single_video(s3_key, cfg, s3):
         logger.info(f"Processing: {s3_key}")
 
         # ----------------------------
-        # SAFE LOCAL PATH
+        # LOCAL PATH
         # ----------------------------
         safe_name = s3_key.replace("/", "_")
         local_video_path = f"/tmp/{safe_name}.mp4"
@@ -69,12 +74,10 @@ def process_single_video(s3_key, cfg, s3):
         s3.download_video(s3_key, local_video_path)
 
         # ----------------------------
-        # PATHS (EC2 SAFE)
+        # OUTPUT PATHS
         # ----------------------------
-        VIDEO_PATH = local_video_path
         OUTPUT_DIR = "/tmp/output"
 
-        # Clean previous output
         if os.path.exists(OUTPUT_DIR):
             shutil.rmtree(OUTPUT_DIR)
 
@@ -87,19 +90,19 @@ def process_single_video(s3_key, cfg, s3):
         logger.info("Starting pipeline...")
 
         # ----------------------------
-        # AUDIO (DISABLED - LIGHT MODE)
+        # AUDIO (disabled for speed)
         # ----------------------------
         audio_vad = AudioVAD(None)
 
         # ----------------------------
-        # INITIALIZE MODULES
+        # INIT MODULES
         # ----------------------------
-        streamer = FFmpegFrameStreamer(VIDEO_PATH, cfg)
+        streamer = FFmpegFrameStreamer(local_video_path, cfg)
         detector = PersonDetector(cfg)
         motion = MotionScorer()
         segment_builder = SegmentBuilder(cfg)
         merger = SegmentMerger(cfg)
-        extractor = ClipExtractor(VIDEO_PATH, CLIPS_DIR)
+        extractor = ClipExtractor(local_video_path, CLIPS_DIR)
         storage = LocalStorage(OUTPUT_DIR)
 
         # ----------------------------
@@ -114,14 +117,14 @@ def process_single_video(s3_key, cfg, s3):
         logger.info(f"Resuming from: {round(last_processed_ts, 2)} sec")
 
         # ----------------------------
-        # MAIN FRAME LOOP
+        # FRAME LOOP
         # ----------------------------
         for frame, timestamp in streamer.frames():
 
             if timestamp < last_processed_ts:
                 continue
 
-            # YOLO INTERVAL CONTROL
+            # YOLO CONTROL
             person_detected = last_detection
 
             if (timestamp - last_yolo_ts) >= cfg.YOLO_INTERVAL:
@@ -136,7 +139,7 @@ def process_single_video(s3_key, cfg, s3):
             # AUDIO
             audio_score = audio_vad.score_at(timestamp)
 
-            # SEGMENT BUILDING
+            # SEGMENT BUILD
             segment_builder.process(
                 timestamp=timestamp,
                 person_detected=person_detected,
@@ -144,14 +147,14 @@ def process_single_video(s3_key, cfg, s3):
                 audio_score=audio_score
             )
 
-            # SAVE CHECKPOINT EVERY 10s
+            # SAVE CHECKPOINT
             if int(timestamp) % 10 == 0:
                 checkpoint.save(timestamp)
 
         logger.info("Frame processing complete.")
 
         # ----------------------------
-        # FINALIZE SEGMENTS
+        # FINAL SEGMENTS
         # ----------------------------
         segments = segment_builder.finalize()
         logger.info(f"Raw segments: {len(segments)}")
@@ -165,12 +168,12 @@ def process_single_video(s3_key, cfg, s3):
         final_metadata = extractor.extract_all(segments)
 
         # ----------------------------
-        # SAVE METADATA LOCALLY
+        # SAVE METADATA
         # ----------------------------
         metadata_path = storage.save_metadata(final_metadata)
 
         # ----------------------------
-        # UPLOAD CLIPS TO S3
+        # UPLOAD CLIPS
         # ----------------------------
         clip_paths = [seg["local_path"] for seg in final_metadata]
 
@@ -181,7 +184,7 @@ def process_single_video(s3_key, cfg, s3):
         )
 
         # ----------------------------
-        # UPLOAD METADATA TO S3
+        # UPLOAD METADATA
         # ----------------------------
         try:
             s3.s3.upload_file(
@@ -196,66 +199,3 @@ def process_single_video(s3_key, cfg, s3):
 
     except Exception as e:
         logger.error(f"Pipeline failed for {s3_key}: {e}")
-
-
-# =========================================================
-# 🔹 SQS WORKER LOOP (EVENT-DRIVEN)
-# =========================================================
-def run_worker():
-    cfg = Config()
-    s3 = S3Storage(bucket_name=cfg.S3_BUCKET)
-
-    sqs = boto3.client("sqs", region_name=cfg.AWS_DEFAULT_REGION)
-
-    # ⚠️ REPLACE THIS WITH YOUR ACTUAL QUEUE URL
-    QUEUE_URL = "YOUR_SQS_QUEUE_URL"
-
-    logger.info("Worker started. Waiting for messages...")
-
-    while True:
-        try:
-            response = sqs.receive_message(
-                QueueUrl=QUEUE_URL,
-                MaxNumberOfMessages=1,
-                WaitTimeSeconds=20  # long polling
-            )
-
-            messages = response.get("Messages", [])
-
-            if not messages:
-                continue
-
-            for msg in messages:
-                try:
-                    body = json.loads(msg["Body"])
-
-                    # Extract S3 key from event
-                    s3_key = body["Records"][0]["s3"]["object"]["key"]
-
-                    logger.info(f"Received job: {s3_key}")
-
-                    # Process video
-                    process_single_video(s3_key, cfg, s3)
-
-                    # Delete message after success
-                    sqs.delete_message(
-                        QueueUrl=QUEUE_URL,
-                        ReceiptHandle=msg["ReceiptHandle"]
-                    )
-
-                    logger.info(f"Deleted message for: {s3_key}")
-
-                except Exception as e:
-                    logger.error(f"Error processing message: {e}")
-
-        except Exception as e:
-            logger.error(f"SQS polling error: {e}")
-            time.sleep(5)  # small backoff
-
-
-# =========================================================
-# 🔹 ENTRY POINT
-# =========================================================
-if __name__ == "__main__":
-    run_worker()
-```
