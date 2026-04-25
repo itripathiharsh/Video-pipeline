@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from config import Config
 from src.storage.s3_storage import S3Storage
-from main_cloud import process_single_video
+from src.main_cloud import process_single_video
 
 import threading
 import logging
