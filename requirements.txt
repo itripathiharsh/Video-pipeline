@@ -9,3 +9,6 @@ PyYAML
 tqdm
 ultralytics
 boto3
+fastapi
+uvicorn
+requests
